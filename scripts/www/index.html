@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <title>小深 · 智能记忆助手（静默总结）</title>
+    <title>小深 · 智能记忆助手（键盘适配增强）</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -429,15 +429,48 @@
     const closeDrawerBtn = document.getElementById('closeDrawerBtn');
     const drawerOverlay = document.getElementById('configDrawer');
 
-    // 移动端输入优化
-    msgInput.addEventListener('focus', () => setTimeout(() => msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200));
-    let lastScrollTimer = null;
-    window.addEventListener('resize', () => {
-        if (lastScrollTimer) clearTimeout(lastScrollTimer);
-        lastScrollTimer = setTimeout(() => {
-            if (document.activeElement === msgInput) msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            else scrollToBottom();
-        }, 150);
+    // ---------- 键盘适配增强 (修复APK内输入框弹起失效) ----------
+    // 方案：监听 visualViewport 的 resize 事件，动态将输入框滚动到可视区域
+    let lastViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    function adjustForKeyboard() {
+        if (!window.visualViewport) return;
+        const currentHeight = window.visualViewport.height;
+        const keyboardVisible = currentHeight < lastViewportHeight - 100; // 高度显著减小说明键盘弹起
+        if (keyboardVisible && document.activeElement === msgInput) {
+            // 键盘弹起且输入框聚焦，将输入框滚动到可视区域中央
+            msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // 同时确保聊天区域底部可见
+            setTimeout(() => {
+                if (messagesArea.lastChild) {
+                    messagesArea.lastChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }, 100);
+        } else if (!keyboardVisible) {
+            // 键盘收起时，滚动回底部
+            scrollToBottom();
+        }
+        lastViewportHeight = currentHeight;
+    }
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', adjustForKeyboard);
+    } else {
+        // 降级方案：监听 window resize
+        window.addEventListener('resize', () => {
+            if (document.activeElement === msgInput) {
+                setTimeout(() => msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+            } else {
+                scrollToBottom();
+            }
+        });
+    }
+    // 输入框聚焦时额外确保滚动
+    msgInput.addEventListener('focus', () => {
+        setTimeout(() => {
+            msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (messagesArea.lastChild) {
+                messagesArea.lastChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }, 200);
     });
 
     // ---------- 全局状态 ----------
@@ -445,14 +478,14 @@
     let conversationSummary = "";      // 长期记忆摘要（不显示在聊天界面）
     let isWaitingReply = false;
     let isSummarizing = false;
-    let lastSummaryAssistanCount = 0;  // 记录上次总结时assistant消息的数量，避免重复总结
+    let lastSummaryAssistanCount = 0;  // 记录上次总结时assistant消息的数量
     let currentAbortController = null;
     let currentApiKey = localStorage.getItem('deepseek_api_key') || '';
     let globalPrompt = localStorage.getItem('global_prompt') || '你是一个全面且富有帮助的AI助手，请准确、友善地回答用户问题。';
     let personaPrompt = localStorage.getItem('persona_prompt') || '你的名字是“小深”，擅长技术解答和创意写作，语气温暖，保持专业和简洁。';
     let temperature = parseFloat(localStorage.getItem('chat_temp')) || 0.7;
     let maxTokens = parseInt(localStorage.getItem('chat_max_tokens')) || 1200;
-    const SUMMARY_THRESHOLD = 20;      // 每20轮AI回复触发一次总结
+    const SUMMARY_THRESHOLD = 20;
 
     // 流式相关变量
     let streamingMessageDiv = null;
@@ -491,7 +524,9 @@
         setTimeout(() => { if(errorToast.innerText === msg) errorToast.style.display = 'none'; }, duration);
     }
     function showTemporaryMsg(msg) { showErrorToast(msg, 1500); }
-    function scrollToBottom() { messagesArea.scrollTop = messagesArea.scrollHeight; }
+    function scrollToBottom() {
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
     function escapeHtml(str) {
         return str.replace(/[&<>]/g, function(m) {
             if (m === '&') return '&amp;';
@@ -538,7 +573,6 @@
         }
         scrollToBottom();
         document.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
-        // 绑定复制按钮
         document.querySelectorAll('.copy-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const rawText = btn.getAttribute('data-msg');
@@ -548,7 +582,7 @@
         });
     }
 
-    // 流式渲染相关
+    // 流式渲染
     function startStreamingMessage() {
         if (streamingMessageDiv) finishStreamingMessage(false);
         streamingMessageDiv = document.createElement('div');
@@ -601,7 +635,6 @@
         isStreaming = false;
         scrollToBottom();
         saveChatHistoryToLocal();
-        // 每次回复完成后检查是否需要总结（基于assistant消息数量）
         checkAndSummarize();
     }
 
@@ -615,25 +648,15 @@
         }
     }
 
-    // 后台静默总结：基于全部历史生成摘要，不删除历史，不在界面显示
+    // 后台静默总结
     async function performSummary() {
         if (isSummarizing) return;
-        if (!currentApiKey) {
-            console.warn("无API Key，跳过总结");
-            return;
-        }
+        if (!currentApiKey) return;
         const assistantCount = chatHistory.filter(m => m.role === 'assistant').length;
-        // 如果已经总结过相同轮次则跳过
-        if (assistantCount <= lastSummaryAssistanCount) return;
-        if (assistantCount < SUMMARY_THRESHOLD) return;
-        // 避免重复总结（例如刚好20、40...）
-        if (assistantCount % SUMMARY_THRESHOLD !== 0) return;
-
+        if (assistantCount <= lastSummaryAssistanCount || assistantCount < SUMMARY_THRESHOLD || assistantCount % SUMMARY_THRESHOLD !== 0) return;
         isSummarizing = true;
-        // 轻柔提示（不影响体验）
         showTemporaryMsg("🧠 正在更新长期记忆...");
         try {
-            // 构建要总结的消息历史（全部历史）
             const historyToSummarize = [...chatHistory];
             const systemSummaryPrompt = `你是一个对话总结助手。请将以下对话内容总结为一段简洁的摘要（不超过300字），保留关键话题、用户需求、重要信息和已解决的问题。摘要用于后续继续对话，无需客套话。`;
             const apiMessages = [
@@ -660,13 +683,10 @@
             const summary = data.choices[0]?.message?.content || "（无摘要）";
             conversationSummary = summary;
             lastSummaryAssistanCount = assistantCount;
-            // 保存到本地
             localStorage.setItem('conversation_summary', conversationSummary);
             localStorage.setItem('last_summary_count', lastSummaryAssistanCount);
-            console.log("✅ 静默总结完成，摘要长度:", summary.length);
         } catch (err) {
             console.error("自动总结失败:", err);
-            // 不打扰用户，仅后台记录
         } finally {
             isSummarizing = false;
         }
@@ -680,7 +700,6 @@
         }
     }
 
-    // 构建system消息（包含摘要记忆和双层提示词）
     function buildSystemMessage() {
         let base = `【底层全局指令】${globalPrompt}\n\n【表层人设】${personaPrompt}`;
         if (conversationSummary) {
@@ -689,7 +708,6 @@
         return base;
     }
 
-    // 调用流式API
     async function callDeepSeekAPIStream(messagesArray, signal, onChunk) {
         if (!currentApiKey) throw new Error('请先设置DeepSeek API Key');
         const requestBody = {
@@ -756,7 +774,6 @@
                 }
             }
             const systemMsg = { role: 'system', content: buildSystemMessage() };
-            // 发送最近30条+system，避免token超限，但完整历史保留在本地
             const historyToSend = workingHistory.slice(-30);
             const apiMessages = [systemMsg, ...historyToSend];
             startStreamingMessage();
@@ -848,7 +865,7 @@
         renderMessages();
     }
 
-    // 设置抽屉
+    // 抽屉逻辑
     function openDrawer() { drawerOverlay.classList.add('open'); }
     function closeDrawer() { drawerOverlay.classList.remove('open'); }
     function applyAllSettings() {
