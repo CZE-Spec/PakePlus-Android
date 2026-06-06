@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <title>小深 · 智能记忆助手（键盘适配增强）</title>
+    <title>小深 · 键盘完美适配版</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -193,6 +193,7 @@
             border-radius: 40px;
             border: 1px solid #e2edf2;
             box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+            transition: margin 0.1s ease;
         }
         .input-wrapper input {
             flex: 1;
@@ -333,6 +334,10 @@
             .chat-container { max-width: 800px; margin: 0 auto; width: 100%; background: #f8fafc; }
             body { background: #eef2f5; align-items: center; justify-content: center; }
         }
+        /* 针对键盘弹起优化输入区域 */
+        .keyboard-visible .input-wrapper {
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
@@ -340,13 +345,13 @@
     <div class="top-bar">
         <div class="logo-area">
             🤖 小深·AI
-            <span>静默记忆</span>
+            <span>键盘适配增强</span>
         </div>
         <button class="settings-icon" id="openDrawerBtn">⚙️</button>
     </div>
     <div class="messages-area" id="messagesArea">
         <div class="message ai">
-            <div class="bubble">📱 我是带智能记忆的AI助手，每20轮对话会自动总结前文（后台静默），提升长对话体验。所有聊天记录完整保留，重启对话会清空记忆。点击⚙️设置API Key开始～</div>
+            <div class="bubble">📱 已深度优化键盘适配，确保APK内输入框自动弹起并保持可见。点击⚙️设置API Key开始～</div>
         </div>
     </div>
     <div class="action-bar">
@@ -429,56 +434,78 @@
     const closeDrawerBtn = document.getElementById('closeDrawerBtn');
     const drawerOverlay = document.getElementById('configDrawer');
 
-    // ---------- 键盘适配增强 (修复APK内输入框弹起失效) ----------
-    // 方案：监听 visualViewport 的 resize 事件，动态将输入框滚动到可视区域
-    let lastViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    function adjustForKeyboard() {
-        if (!window.visualViewport) return;
-        const currentHeight = window.visualViewport.height;
-        const keyboardVisible = currentHeight < lastViewportHeight - 100; // 高度显著减小说明键盘弹起
-        if (keyboardVisible && document.activeElement === msgInput) {
-            // 键盘弹起且输入框聚焦，将输入框滚动到可视区域中央
-            msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            // 同时确保聊天区域底部可见
+    // ---------- 超级键盘适配 (针对WebView强制生效) ----------
+    let originalContainerHeight = 0;
+    let lastWindowHeight = window.innerHeight;
+    
+    function forceScrollInputToView() {
+        if (document.activeElement === msgInput) {
+            // 多次滚动确保生效
+            msgInput.scrollIntoView({ behavior: 'auto', block: 'center' });
+            setTimeout(() => msgInput.scrollIntoView({ behavior: 'auto', block: 'center' }), 50);
+            setTimeout(() => msgInput.scrollIntoView({ behavior: 'auto', block: 'center' }), 150);
+            // 手动调整messagesArea滚动到底部，让最新消息可见
             setTimeout(() => {
                 if (messagesArea.lastChild) {
-                    messagesArea.lastChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    messagesArea.lastChild.scrollIntoView({ behavior: 'auto', block: 'nearest' });
                 }
-            }, 100);
-        } else if (!keyboardVisible) {
-            // 键盘收起时，滚动回底部
+            }, 200);
+        }
+    }
+    
+    // 监听窗口大小变化 (键盘弹起/收起)
+    function handleWindowResize() {
+        const newHeight = window.innerHeight;
+        const delta = lastWindowHeight - newHeight;
+        const isKeyboardOpen = delta > 150; // 高度减少超过150px视为键盘弹起
+        if (isKeyboardOpen) {
+            document.body.classList.add('keyboard-visible');
+            forceScrollInputToView();
+        } else if (delta < -100) {
+            // 键盘收起
+            document.body.classList.remove('keyboard-visible');
             scrollToBottom();
         }
-        lastViewportHeight = currentHeight;
+        lastWindowHeight = newHeight;
     }
-    if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', adjustForKeyboard);
-    } else {
-        // 降级方案：监听 window resize
-        window.addEventListener('resize', () => {
-            if (document.activeElement === msgInput) {
-                setTimeout(() => msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
-            } else {
-                scrollToBottom();
-            }
-        });
-    }
-    // 输入框聚焦时额外确保滚动
+    
+    // 输入框聚焦时强制滚动
     msgInput.addEventListener('focus', () => {
-        setTimeout(() => {
-            msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            if (messagesArea.lastChild) {
-                messagesArea.lastChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-        }, 200);
+        // 延迟多次执行，确保键盘完全弹出后调整
+        forceScrollInputToView();
+        setTimeout(forceScrollInputToView, 100);
+        setTimeout(forceScrollInputToView, 300);
+        // 额外监听一次触摸滚动防止意外
     });
-
-    // ---------- 全局状态 ----------
-    let chatHistory = [];               // 存储所有历史消息 { role, content }
-    let conversationSummary = "";      // 长期记忆摘要（不显示在聊天界面）
+    
+    // 全局监听resize
+    window.addEventListener('resize', handleWindowResize);
+    // 初始化记录高度
+    lastWindowHeight = window.innerHeight;
+    
+    // 额外补充：点击发送后确保输入框不遮挡，并滚动到底部
+    const originalSend = sendBtn.click;
+    sendBtn.addEventListener('click', function(e) {
+        // 不覆盖原有逻辑，只是增加滚动
+        setTimeout(() => {
+            if (document.activeElement === msgInput) {
+                msgInput.blur(); // 可选项：发送后收起键盘，更整洁
+            }
+            scrollToBottom();
+        }, 100);
+    });
+    
+    // 辅助滚动到底部函数
+    function scrollToBottom() {
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
+    
+    // ---------- 原有核心逻辑 ----------
+    let chatHistory = [];
+    let conversationSummary = "";
     let isWaitingReply = false;
     let isSummarizing = false;
-    let lastSummaryAssistanCount = 0;  // 记录上次总结时assistant消息的数量
+    let lastSummaryAssistanCount = 0;
     let currentAbortController = null;
     let currentApiKey = localStorage.getItem('deepseek_api_key') || '';
     let globalPrompt = localStorage.getItem('global_prompt') || '你是一个全面且富有帮助的AI助手，请准确、友善地回答用户问题。';
@@ -486,14 +513,12 @@
     let temperature = parseFloat(localStorage.getItem('chat_temp')) || 0.7;
     let maxTokens = parseInt(localStorage.getItem('chat_max_tokens')) || 1200;
     const SUMMARY_THRESHOLD = 20;
-
-    // 流式相关变量
+    
     let streamingMessageDiv = null;
     let streamingBubble = null;
     let accumulatedContent = "";
     let isStreaming = false;
-
-    // 辅助函数
+    
     function updateParamUI() {
         temperatureSlider.value = temperature;
         maxTokensSlider.value = maxTokens;
@@ -524,9 +549,7 @@
         setTimeout(() => { if(errorToast.innerText === msg) errorToast.style.display = 'none'; }, duration);
     }
     function showTemporaryMsg(msg) { showErrorToast(msg, 1500); }
-    function scrollToBottom() {
-        messagesArea.scrollTop = messagesArea.scrollHeight;
-    }
+    
     function escapeHtml(str) {
         return str.replace(/[&<>]/g, function(m) {
             if (m === '&') return '&amp;';
@@ -535,7 +558,7 @@
             return m;
         });
     }
-
+    
     function createMessageElement(role, content) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role === 'user' ? 'user' : 'ai'}`;
@@ -557,7 +580,7 @@
         messageDiv.appendChild(metaDiv);
         return messageDiv;
     }
-
+    
     function renderMessages() {
         if (isStreaming) return;
         messagesArea.innerHTML = '';
@@ -581,8 +604,7 @@
             });
         });
     }
-
-    // 流式渲染
+    
     function startStreamingMessage() {
         if (streamingMessageDiv) finishStreamingMessage(false);
         streamingMessageDiv = document.createElement('div');
@@ -601,7 +623,7 @@
         isStreaming = true;
         return streamingBubble;
     }
-
+    
     function appendStreamingText(chunk) {
         if (!streamingBubble) return;
         accumulatedContent += chunk;
@@ -612,7 +634,7 @@
         scrollToBottom();
         streamingBubble.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
     }
-
+    
     function finishStreamingMessage(saveToHistory = true) {
         if (!streamingMessageDiv) return;
         if (saveToHistory && accumulatedContent) {
@@ -637,7 +659,7 @@
         saveChatHistoryToLocal();
         checkAndSummarize();
     }
-
+    
     function abortStreaming() {
         if (isStreaming && streamingMessageDiv) {
             streamingMessageDiv.remove();
@@ -647,8 +669,7 @@
             accumulatedContent = "";
         }
     }
-
-    // 后台静默总结
+    
     async function performSummary() {
         if (isSummarizing) return;
         if (!currentApiKey) return;
@@ -691,7 +712,7 @@
             isSummarizing = false;
         }
     }
-
+    
     function checkAndSummarize() {
         if (isSummarizing) return;
         const assistantCount = chatHistory.filter(m => m.role === 'assistant').length;
@@ -699,7 +720,7 @@
             performSummary();
         }
     }
-
+    
     function buildSystemMessage() {
         let base = `【底层全局指令】${globalPrompt}\n\n【表层人设】${personaPrompt}`;
         if (conversationSummary) {
@@ -707,7 +728,7 @@
         }
         return base;
     }
-
+    
     async function callDeepSeekAPIStream(messagesArray, signal, onChunk) {
         if (!currentApiKey) throw new Error('请先设置DeepSeek API Key');
         const requestBody = {
@@ -751,7 +772,7 @@
             }
         }
     }
-
+    
     async function sendUserMessage(userText, isRegenerateMode = false) {
         if (isWaitingReply) { showErrorToast('请等待上一个回复完成'); return false; }
         if (!isRegenerateMode && (!userText || userText.trim() === '')) return false;
@@ -760,7 +781,6 @@
         const abortCtrl = new AbortController();
         currentAbortController = abortCtrl;
         isWaitingReply = true;
-
         try {
             let workingHistory = [...chatHistory];
             if (!isRegenerateMode) {
@@ -804,7 +824,7 @@
             return false;
         }
     }
-
+    
     async function regenerateLastReply() {
         if (isWaitingReply) { showErrorToast('请等待回复完成'); return; }
         if (chatHistory.length === 0 || chatHistory[chatHistory.length-1].role !== 'assistant') {
@@ -815,7 +835,7 @@
         renderMessages();
         await sendUserMessage('', true);
     }
-
+    
     function undoLastMessage() {
         if (isWaitingReply) { showErrorToast('请等待回复完成后再撤回'); return; }
         if (chatHistory.length === 0) { showErrorToast('没有可撤回的消息'); return; }
@@ -829,7 +849,7 @@
         renderMessages();
         saveChatHistoryToLocal();
     }
-
+    
     function resetChat() {
         if (isWaitingReply) { showErrorToast('请等待回复完成再重启'); return; }
         if (currentAbortController) { currentAbortController.abort(); currentAbortController = null; }
@@ -843,7 +863,7 @@
         saveChatHistoryToLocal();
         showTemporaryMsg('对话已重置，所有记忆清空');
     }
-
+    
     function saveChatHistoryToLocal() {
         try {
             localStorage.setItem('chat_history', JSON.stringify(chatHistory));
@@ -852,7 +872,7 @@
             localStorage.setItem('last_summary_count', lastSummaryAssistanCount);
         } catch(e) {}
     }
-
+    
     function loadChatHistory() {
         const stored = localStorage.getItem('chat_history');
         if (stored) {
@@ -864,8 +884,7 @@
         if (storedLastCount) lastSummaryAssistanCount = parseInt(storedLastCount);
         renderMessages();
     }
-
-    // 抽屉逻辑
+    
     function openDrawer() { drawerOverlay.classList.add('open'); }
     function closeDrawer() { drawerOverlay.classList.remove('open'); }
     function applyAllSettings() {
@@ -895,7 +914,7 @@
             showTemporaryMsg('已清除API Key');
         }
     }
-
+    
     function loadAllSettings() {
         if (currentApiKey) apiKeyInput.value = currentApiKey;
         updateApiStatusUI();
@@ -909,7 +928,7 @@
         if (storedMax) maxTokens = parseInt(storedMax);
         updateParamUI();
     }
-
+    
     // 事件绑定
     sendBtn.addEventListener('click', () => {
         const text = msgInput.value.trim();
@@ -926,8 +945,7 @@
     drawerOverlay.addEventListener('click', (e) => { if(e.target === drawerOverlay) closeDrawer(); });
     temperatureSlider.addEventListener('input', () => { tempValue.innerText = parseFloat(temperatureSlider.value).toFixed(2); });
     maxTokensSlider.addEventListener('input', () => { tokensValue.innerText = maxTokensSlider.value; });
-
-    // 启动
+    
     loadAllSettings();
     loadChatHistory();
     if (!currentApiKey) showErrorToast('请点击⚙️ 设置DeepSeek API Key', 3000);
