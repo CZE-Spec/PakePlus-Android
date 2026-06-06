@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <title>小深 · 键盘完美适配版</title>
+    <title>小深 · 终极键盘适配（强力滚动监督）</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -84,6 +84,11 @@
             gap: 14px;
             scroll-behavior: smooth;
         }
+        /* 底部锚点（辅助滚动） */
+        .scroll-anchor {
+            height: 2px;
+            width: 100%;
+        }
         .message {
             display: flex;
             flex-direction: column;
@@ -138,24 +143,6 @@
             padding: 2px 8px;
             border-radius: 30px;
         }
-        .typing-indicator {
-            background: #eef2f5;
-            border-radius: 20px;
-            padding: 10px 16px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .loading-spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #cbd5e1;
-            border-top-color: #10a37f;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         .action-bar {
             display: flex;
             gap: 12px;
@@ -193,7 +180,6 @@
             border-radius: 40px;
             border: 1px solid #e2edf2;
             box-shadow: 0 2px 6px rgba(0,0,0,0.03);
-            transition: margin 0.1s ease;
         }
         .input-wrapper input {
             flex: 1;
@@ -334,10 +320,6 @@
             .chat-container { max-width: 800px; margin: 0 auto; width: 100%; background: #f8fafc; }
             body { background: #eef2f5; align-items: center; justify-content: center; }
         }
-        /* 针对键盘弹起优化输入区域 */
-        .keyboard-visible .input-wrapper {
-            margin-bottom: 0;
-        }
     </style>
 </head>
 <body>
@@ -345,14 +327,15 @@
     <div class="top-bar">
         <div class="logo-area">
             🤖 小深·AI
-            <span>键盘适配增强</span>
+            <span>强力滚动监督</span>
         </div>
         <button class="settings-icon" id="openDrawerBtn">⚙️</button>
     </div>
     <div class="messages-area" id="messagesArea">
         <div class="message ai">
-            <div class="bubble">📱 已深度优化键盘适配，确保APK内输入框自动弹起并保持可见。点击⚙️设置API Key开始～</div>
+            <div class="bubble">📱 已启用“滚动监督模式”：输入框聚焦后会持续自动调整位置，确保键盘不会遮挡输入区。点击⚙️设置API Key开始～</div>
         </div>
+        <div class="scroll-anchor" id="scrollAnchor"></div>
     </div>
     <div class="action-bar">
         <div class="action-group">
@@ -412,10 +395,11 @@
 <div id="errorToast" class="error-toast"></div>
 
 <script>
-    // DOM 元素
+    // ---------- DOM 元素 ----------
     const messagesArea = document.getElementById('messagesArea');
     const msgInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
+    const scrollAnchor = document.getElementById('scrollAnchor');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const saveKeyBtn = document.getElementById('saveKeyBtn');
     const globalPromptTxt = document.getElementById('globalPrompt');
@@ -434,73 +418,134 @@
     const closeDrawerBtn = document.getElementById('closeDrawerBtn');
     const drawerOverlay = document.getElementById('configDrawer');
 
-    // ---------- 超级键盘适配 (针对WebView强制生效) ----------
-    let originalContainerHeight = 0;
-    let lastWindowHeight = window.innerHeight;
+    // ================== 终极键盘适配：滚动监督器 ==================
+    // 此方案不依赖任何 resize 事件，通过定时检查输入框是否在可视区域内来强制滚动
+    let scrollWatchdogInterval = null;
     
-    function forceScrollInputToView() {
-        if (document.activeElement === msgInput) {
-            // 多次滚动确保生效
-            msgInput.scrollIntoView({ behavior: 'auto', block: 'center' });
-            setTimeout(() => msgInput.scrollIntoView({ behavior: 'auto', block: 'center' }), 50);
-            setTimeout(() => msgInput.scrollIntoView({ behavior: 'auto', block: 'center' }), 150);
-            // 手动调整messagesArea滚动到底部，让最新消息可见
-            setTimeout(() => {
-                if (messagesArea.lastChild) {
-                    messagesArea.lastChild.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    function isInputFullyVisible() {
+        if (!msgInput) return true;
+        const rect = msgInput.getBoundingClientRect();
+        const viewHeight = window.innerHeight;
+        // 判断输入框是否完全在可视区域内（上下边缘都未超出）
+        return rect.top >= 0 && rect.bottom <= viewHeight;
+    }
+    
+    function forceScrollToInput() {
+        if (!msgInput) return;
+        // 优先使用锚点滚动（平滑且准确）
+        if (scrollAnchor) {
+            scrollAnchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } else {
+            msgInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        // 额外使用 messagesArea 滚动到底部，确保消息不被遮挡
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+        // 再次尝试将输入框置于视图中间（双重保险）
+        setTimeout(() => {
+            if (scrollAnchor) {
+                scrollAnchor.scrollIntoView({ behavior: 'auto', block: 'end' });
+            } else {
+                msgInput.scrollIntoView({ behavior: 'auto', block: 'center' });
+            }
+        }, 30);
+    }
+    
+    function startScrollWatchdog() {
+        if (scrollWatchdogInterval) clearInterval(scrollWatchdogInterval);
+        // 立即执行一次
+        forceScrollToInput();
+        // 每 80ms 检查一次，如果输入框不可见则立即滚动，持续 3 秒后降频但继续
+        let checkCount = 0;
+        scrollWatchdogInterval = setInterval(() => {
+            if (document.activeElement === msgInput) {
+                if (!isInputFullyVisible()) {
+                    forceScrollToInput();
                 }
-            }, 200);
+                checkCount++;
+                // 前 3 秒高频检查后，降为 200ms 间隔，但依然保持直到失去焦点
+                if (checkCount > 40) { // 约 3.2 秒后
+                    if (scrollWatchdogInterval) {
+                        clearInterval(scrollWatchdogInterval);
+                        // 改为低频模式：每 250ms 检查一次，但不再频繁重建
+                        scrollWatchdogInterval = setInterval(() => {
+                            if (document.activeElement === msgInput && !isInputFullyVisible()) {
+                                forceScrollToInput();
+                            }
+                        }, 250);
+                    }
+                }
+            } else {
+                // 输入框失去焦点，停止监督
+                stopScrollWatchdog();
+            }
+        }, 80);
+    }
+    
+    function stopScrollWatchdog() {
+        if (scrollWatchdogInterval) {
+            clearInterval(scrollWatchdogInterval);
+            scrollWatchdogInterval = null;
         }
     }
     
-    // 监听窗口大小变化 (键盘弹起/收起)
-    function handleWindowResize() {
-        const newHeight = window.innerHeight;
-        const delta = lastWindowHeight - newHeight;
-        const isKeyboardOpen = delta > 150; // 高度减少超过150px视为键盘弹起
-        if (isKeyboardOpen) {
-            document.body.classList.add('keyboard-visible');
-            forceScrollInputToView();
-        } else if (delta < -100) {
-            // 键盘收起
-            document.body.classList.remove('keyboard-visible');
-            scrollToBottom();
-        }
-        lastWindowHeight = newHeight;
-    }
-    
-    // 输入框聚焦时强制滚动
+    // 监听焦点事件
     msgInput.addEventListener('focus', () => {
-        // 延迟多次执行，确保键盘完全弹出后调整
-        forceScrollInputToView();
-        setTimeout(forceScrollInputToView, 100);
-        setTimeout(forceScrollInputToView, 300);
-        // 额外监听一次触摸滚动防止意外
+        startScrollWatchdog();
+        // 额外：为防止键盘弹出时初次滚动不够，延迟多次触发
+        setTimeout(forceScrollToInput, 100);
+        setTimeout(forceScrollToInput, 300);
+        setTimeout(forceScrollToInput, 600);
     });
     
-    // 全局监听resize
-    window.addEventListener('resize', handleWindowResize);
-    // 初始化记录高度
-    lastWindowHeight = window.innerHeight;
-    
-    // 额外补充：点击发送后确保输入框不遮挡，并滚动到底部
-    const originalSend = sendBtn.click;
-    sendBtn.addEventListener('click', function(e) {
-        // 不覆盖原有逻辑，只是增加滚动
+    msgInput.addEventListener('blur', () => {
+        stopScrollWatchdog();
+        // 失去焦点后，可滚动到底部以显示完整消息
         setTimeout(() => {
-            if (document.activeElement === msgInput) {
-                msgInput.blur(); // 可选项：发送后收起键盘，更整洁
-            }
-            scrollToBottom();
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+            if (scrollAnchor) scrollAnchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }, 100);
     });
     
-    // 辅助滚动到底部函数
+    // 全局滚动到底部辅助函数（用于消息更新后）
     function scrollToBottom() {
         messagesArea.scrollTop = messagesArea.scrollHeight;
+        if (scrollAnchor) {
+            scrollAnchor.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+        // 如果输入框仍处于聚焦状态，确保它可见
+        if (document.activeElement === msgInput && !isInputFullyVisible()) {
+            forceScrollToInput();
+        }
     }
     
-    // ---------- 原有核心逻辑 ----------
+    // 发送消息后额外处理
+    sendBtn.addEventListener('click', () => {
+        setTimeout(() => {
+            scrollToBottom();
+            if (document.activeElement === msgInput) {
+                forceScrollToInput();
+            }
+        }, 50);
+    });
+    
+    // 窗口大小变化时（如键盘收起），也做一次调整
+    window.addEventListener('resize', () => {
+        if (document.activeElement === msgInput) {
+            forceScrollToInput();
+        } else {
+            scrollToBottom();
+        }
+    });
+    
+    // 当历史消息改变（重新生成、撤回、重启等）后调用
+    function afterMessageUpdate() {
+        setTimeout(() => {
+            scrollToBottom();
+            if (document.activeElement === msgInput) forceScrollToInput();
+        }, 100);
+    }
+    
+    // ================== 以下为原有核心功能（流式对话 + 总结）==================
     let chatHistory = [];
     let conversationSummary = "";
     let isWaitingReply = false;
@@ -594,6 +639,13 @@
                 messagesArea.appendChild(createMessageElement(msg.role, msg.content));
             });
         }
+        // 重新添加锚点
+        const anchor = document.createElement('div');
+        anchor.className = 'scroll-anchor';
+        anchor.id = 'scrollAnchor';
+        messagesArea.appendChild(anchor);
+        // 更新引用
+        window.scrollAnchor = document.getElementById('scrollAnchor');
         scrollToBottom();
         document.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         document.querySelectorAll('.copy-btn').forEach(btn => {
@@ -658,6 +710,7 @@
         scrollToBottom();
         saveChatHistoryToLocal();
         checkAndSummarize();
+        afterMessageUpdate();
     }
     
     function abortStreaming() {
@@ -834,6 +887,7 @@
         chatHistory.pop();
         renderMessages();
         await sendUserMessage('', true);
+        afterMessageUpdate();
     }
     
     function undoLastMessage() {
@@ -848,6 +902,7 @@
         }
         renderMessages();
         saveChatHistoryToLocal();
+        afterMessageUpdate();
     }
     
     function resetChat() {
@@ -862,6 +917,7 @@
         renderMessages();
         saveChatHistoryToLocal();
         showTemporaryMsg('对话已重置，所有记忆清空');
+        afterMessageUpdate();
     }
     
     function saveChatHistoryToLocal() {
@@ -946,6 +1002,7 @@
     temperatureSlider.addEventListener('input', () => { tempValue.innerText = parseFloat(temperatureSlider.value).toFixed(2); });
     maxTokensSlider.addEventListener('input', () => { tokensValue.innerText = maxTokensSlider.value; });
     
+    // 启动应用
     loadAllSettings();
     loadChatHistory();
     if (!currentApiKey) showErrorToast('请点击⚙️ 设置DeepSeek API Key', 3000);
